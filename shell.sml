@@ -1,3 +1,8 @@
+val stdin = (Posix.FileSys.wordToFD o SysWord.fromInt) 0;
+val stdout = (Posix.FileSys.wordToFD o SysWord.fromInt) 1;
+val stderr = (Posix.FileSys.wordToFD o SysWord.fromInt) 2;
+
+
 fun $ args () = let
   val pid_opt = Posix.Process.fork ();
   fun snd (_, b) = b;
@@ -17,10 +22,8 @@ end;
 
 infix &;
 
-fun pipeto (proc1, proc2) () = let
+fun pipe stream (proc1, proc2) () = let
   val { infd, outfd } = Posix.IO.pipe ();
-  val stdout = (Posix.FileSys.wordToFD o SysWord.fromInt) 1;
-  val stdin = (Posix.FileSys.wordToFD o SysWord.fromInt) 0;
   fun fst (a, _) = a;
   fun snd (_, b) = b;
   fun reroute from to = (
@@ -41,4 +44,39 @@ in
                               )
 end;
 
-infix pipeto;
+fun stdoutTo procs = pipe stdout procs;
+fun stderrTo procs = pipe stderr procs;
+fun $> procs = stdoutTo procs;
+
+infix stdoutTo;
+infix stderrTo;
+infix $>;
+
+fun consume proc1 () = let
+  val { infd, outfd } = Posix.IO.pipe ();
+  fun fst (a, _) = a;
+  fun snd (_, b) = b;
+  fun reroute from to = (
+    Posix.IO.dup2 { old = to, new = from };
+    Posix.IO.close infd;
+    Posix.IO.close outfd
+    );
+  val trConfig = { fd = infd, name = "consumerStream", initBlkMode = false };
+in
+  case Posix.Process.fork () of
+       NONE => (reroute stdout outfd; proc1 (); Posix.Process.exit (Word8.fromInt 0))
+     | SOME first_pid => (
+     Posix.IO.close outfd;
+     let
+       val reader = Posix.IO.mkTextReader trConfig;
+       val vec = CharVector.fromList [];
+       val (out, stream) =  (TextIO.StreamIO.inputAll o TextIO.StreamIO.mkInstream) (reader, vec)
+     in
+       TextIO.StreamIO.closeIn stream;
+       String.implode (CharVector.foldr (op::) [] out)
+     end)
+end;
+
+fun splitLines str = String.tokens (fn c => c = #"\n") str;
+
+fun consumeLines proc = splitLines (consume proc ());
