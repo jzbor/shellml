@@ -12,6 +12,8 @@ in
     | SOME pid => (snd o Posix.Process.waitpid) (Posix.Process.W_CHILD pid, [])
 end;
 
+fun $$ cmd () = OS.Process.system cmd;
+
 fun & (proc1, proc2) () = let
   val pid_opt = Posix.Process.fork ();
 in
@@ -51,6 +53,7 @@ fun $> procs = stdoutTo procs;
 infix stdoutTo;
 infix stderrTo;
 infix $>;
+
 
 fun consume proc1 () = let
   val { infd, outfd } = Posix.IO.pipe ();
