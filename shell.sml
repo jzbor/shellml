@@ -12,7 +12,7 @@ in
     | SOME pid => (snd o Posix.Process.waitpid) (Posix.Process.W_CHILD pid, [])
 end;
 
-fun $$ cmd () = OS.Process.system cmd;
+fun $$ cmd () = (Posix.Process.fromStatus o OS.Process.system) cmd;
 
 fun & (proc1, proc2) () = let
   val pid_opt = Posix.Process.fork ();
@@ -83,3 +83,10 @@ end;
 fun splitLines str = String.tokens (fn c => c = #"\n") str;
 
 fun consumeLines proc = splitLines (consume proc ());
+
+fun pipeline procs = let
+  fun combine (next, proc) = proc $> next;
+  fun init () = Posix.Process.fromStatus OS.Process.success;
+in
+  List.foldl combine init procs
+end;
