@@ -2,6 +2,8 @@ val stdin = (Posix.FileSys.wordToFD o SysWord.fromInt) 0;
 val stdout = (Posix.FileSys.wordToFD o SysWord.fromInt) 1;
 val stderr = (Posix.FileSys.wordToFD o SysWord.fromInt) 2;
 
+fun exit () = Posix.Process.exit (Word8.fromInt 0);
+
 
 fun $ args () = let
   val pid_opt = Posix.Process.fork ();
@@ -14,13 +16,10 @@ end;
 
 fun $$ cmd () = (Posix.Process.fromStatus o OS.Process.system) cmd;
 
-fun & (proc1, proc2) () = let
-  val pid_opt = Posix.Process.fork ();
-in
-  case pid_opt of
-      NONE => proc1 ()
-    | SOME _ => proc2 ()
-end;
+fun & (proc1, proc2) () = case Posix.Process.fork () of
+                               NONE => (proc1 (); exit ())
+                             | SOME pid => (proc2 ()) before
+                              (Posix.Process.waitpid (Posix.Process.W_CHILD pid, []); ());
 
 infix &;
 
@@ -34,9 +33,9 @@ fun pipe stream (proc1, proc2) () = let
     );
 in
   case Posix.Process.fork () of
-       NONE => (reroute stdout outfd; proc1 (); Posix.Process.exit (Word8.fromInt 0))
+       NONE => (reroute stdout outfd; proc1 (); exit ())
      | SOME first_pid => case Posix.Process.fork () of
-                              NONE => (reroute stdin infd; proc2 (); Posix.Process.exit (Word8.fromInt 0))
+                              NONE => (reroute stdin infd; proc2 (); exit ())
                             | SOME second_pid => (
                               Posix.IO.close infd;
                               Posix.IO.close outfd;
@@ -65,8 +64,8 @@ fun consume proc () = let
   val trConfig = { fd = infd, name = "consumerStream", initBlkMode = false };
 in
   case Posix.Process.fork () of
-       NONE => (reroute stdout outfd; proc (); Posix.Process.exit (Word8.fromInt 0))
-     | SOME first_pid => (
+       NONE => (reroute stdout outfd; proc (); exit ())
+     | SOME pid => (
      Posix.IO.close outfd;
      let
        val reader = Posix.IO.mkTextReader trConfig;
@@ -74,6 +73,7 @@ in
        val (out, stream) =  (TextIO.StreamIO.inputAll o TextIO.StreamIO.mkInstream) (reader, vec)
      in
        TextIO.StreamIO.closeIn stream;
+       Posix.Process.waitpid (Posix.Process.W_CHILD pid, []);
        String.implode (CharVector.foldr (op::) [] out)
      end)
 end;
@@ -100,7 +100,8 @@ fun writeTo filename () = let
          SOME line => (TextIO.outputSubstr (outStream, Substring.full line); loop ())
        | NONE      => ()
 in
-  (loop ()) before (TextIO.closeOut outStream)
+  loop ();
+  TextIO.closeOut outStream
 end;
 
 fun splitOut proc () = let
@@ -128,14 +129,17 @@ fun splitOut proc () = let
     );
 in
   case Posix.Process.fork () of
-       NONE => (reroute stdin infd; proc (); Posix.Process.exit (Word8.fromInt 0))
+       NONE => (reroute stdin infd; proc (); exit ())
      | SOME pid => (
        Posix.IO.close infd;
        let
          val writer = Posix.IO.mkTextWriter trConfig;
          val outStream = TextIO.StreamIO.mkOutstream (writer, IO.LINE_BUF)
        in
-         (loop outStream ()) before (TextIO.StreamIO.closeOut outStream)
+         loop outStream ();
+         TextIO.StreamIO.closeOut outStream;
+         Posix.Process.waitpid (Posix.Process.W_CHILD pid, []);
+         ()
        end
      )
 end;
